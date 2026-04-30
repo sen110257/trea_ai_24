@@ -139,6 +139,8 @@ const isNewHighScore = ref(false)
 
 let animationId = null
 let lastTime = 0
+let cameraY = 0
+let highestPlayerY = Infinity
 
 const PLATFORM_TYPES = {
   NORMAL: 'normal',
@@ -358,13 +360,13 @@ const createPlatform = (y, isStart = false) => {
 const initPlatforms = () => {
   platforms = []
   
-  const startY = canvas.height * 0.4
+  const startY = canvas.height * 0.6
   const startPlatform = createPlatform(startY, true)
   platforms.push(startPlatform)
   
   let y = startY - difficultyParams.platformSpacing
   
-  while (y > -difficultyParams.platformSpacing * 3) {
+  while (y > -difficultyParams.platformSpacing * 8) {
     platforms.push(createPlatform(y))
     y -= difficultyParams.platformSpacing
   }
@@ -376,7 +378,7 @@ const initPlayer = () => {
   player.x = startPlatform.x + (startPlatform.width - player.width) / 2
   player.y = startPlatform.y - player.height
   player.velocityX = 0
-  player.velocityY = 0
+  player.velocityY = -10
   player.standingPlatform = startPlatform
   player.facingRight = true
 }
@@ -387,6 +389,8 @@ const startGame = () => {
   currentFloor.value = 0
   isNewHighScore.value = false
   particles = []
+  cameraY = 0
+  highestPlayerY = Infinity
   
   resetDifficulty()
   initPlatforms()
@@ -490,7 +494,7 @@ const updateParticles = () => {
   for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i]
     p.x += p.velocityX
-    p.y += p.velocityY + difficultyParams.scrollSpeed
+    p.y += p.velocityY
     p.velocityY += 0.15
     p.life -= p.decay
     
@@ -501,11 +505,9 @@ const updateParticles = () => {
 }
 
 const checkGameOver = () => {
-  if (player.y + player.height < -10) {
-    return true
-  }
+  const screenY = player.y - cameraY
   
-  if (player.y > canvas.height + 50) {
+  if (screenY > canvas.height + 50) {
     return true
   }
   
@@ -560,7 +562,6 @@ const handlePlatformCollision = () => {
         playerCenterX <= platform.x + platform.width + 5) {
       
       player.y = platform.y - player.height
-      player.velocityY = 0
       player.standingPlatform = platform
       
       if (!platform.touched) {
@@ -580,12 +581,13 @@ const handlePlatformCollision = () => {
       
       switch (platform.type) {
         case PLATFORM_TYPES.BOUNCY:
-          player.velocityY = -14
+          player.velocityY = -16
           player.standingPlatform = null
           createParticles(player.x + player.width / 2, player.y + player.height, '#80C8FF', 15)
           break
           
         case PLATFORM_TYPES.DISAPPEARING:
+          player.velocityY = -12
           if (!platform.isDisappearing) {
             platform.isDisappearing = true
             createParticles(player.x + player.width / 2, player.y + player.height, '#FF8080', 10)
@@ -593,10 +595,14 @@ const handlePlatformCollision = () => {
           break
           
         case PLATFORM_TYPES.BONUS:
+          player.velocityY = -12
           const bigBonus = 50 + Math.floor(Math.random() * 100)
           score.value += bigBonus
           createParticles(player.x + player.width / 2, player.y + player.height, '#FFD700', 25)
           break
+          
+        default:
+          player.velocityY = -12
       }
       
       break
@@ -608,12 +614,19 @@ const handlePlatformCollision = () => {
   }
   
   player.y += player.velocityY
+  
+  if (player.y < highestPlayerY) {
+    highestPlayerY = player.y
+  }
 }
 
 const updatePlatforms = () => {
+  const targetCameraY = Math.min(cameraY, player.y - canvas.height * 0.4)
+  if (targetCameraY < cameraY) {
+    cameraY = targetCameraY
+  }
+  
   platforms.forEach(platform => {
-    platform.y += difficultyParams.scrollSpeed
-    
     if (platform.velocityX !== 0) {
       platform.x += platform.velocityX
       if (platform.x <= 0) {
@@ -631,14 +644,17 @@ const updatePlatforms = () => {
     }
   })
   
-  platforms = platforms.filter(p => p.y < canvas.height + 100 && p.opacity > 0)
+  platforms = platforms.filter(p => {
+    const screenY = p.y - cameraY
+    return screenY < canvas.height + 150 && p.opacity > 0
+  })
   
-  let highestY = Math.min(...platforms.map(p => p.y))
+  let highestPlatformY = Math.min(...platforms.map(p => p.y), Infinity)
   
-  while (highestY > -difficultyParams.platformSpacing) {
-    const newY = highestY - difficultyParams.platformSpacing
+  while (highestPlatformY > cameraY - difficultyParams.platformSpacing * 2) {
+    const newY = highestPlatformY - difficultyParams.platformSpacing
     platforms.push(createPlatform(newY))
-    highestY = newY
+    highestPlatformY = newY
   }
 }
 
@@ -880,6 +896,9 @@ const render = () => {
   
   drawBackground()
   
+  ctx.save()
+  ctx.translate(0, -cameraY)
+  
   platforms.forEach(platform => drawPlatform(platform))
   
   drawParticles()
@@ -887,6 +906,8 @@ const render = () => {
   if (gameState.value === 'playing' || gameState.value === 'paused') {
     drawPlayer()
   }
+  
+  ctx.restore()
 }
 
 const gameLoop = (currentTime = 0) => {
