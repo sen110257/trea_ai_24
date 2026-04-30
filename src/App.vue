@@ -125,11 +125,11 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 
 const gameCanvas = ref(null)
-const canvas = ref(null)
-const ctx = ref(null)
+let canvas = null
+let ctx = null
 
 const gameState = ref('idle')
 const score = ref(0)
@@ -139,33 +139,6 @@ const isNewHighScore = ref(false)
 
 let animationId = null
 let lastTime = 0
-let difficulty = 1
-
-const player = {
-  x: 0,
-  y: 0,
-  width: 40,
-  height: 50,
-  velocityX: 0,
-  velocityY: 0,
-  maxSpeed: 8,
-  acceleration: 0.8,
-  friction: 0.9,
-  facingRight: true,
-  isOnPlatform: false,
-  currentPlatform: null,
-  animFrame: 0
-}
-
-let platforms = []
-let particles = []
-
-const keys = {
-  left: false,
-  right: false
-}
-
-const touchDirection = ref(null)
 
 const PLATFORM_TYPES = {
   NORMAL: 'normal',
@@ -188,11 +161,65 @@ const COLORS = {
     disappearing: { top: '#FFB3B3', bottom: '#FF8080', glow: '#FF6666' },
     bouncy: { top: '#B3E0FF', bottom: '#80C8FF', glow: '#66B2FF' },
     bonus: { top: '#FFE066', bottom: '#FFD700', glow: '#FFC700' }
-  },
-  background: {
-    top: '#E8F4F8',
-    bottom: '#D4E5ED'
   }
+}
+
+const DIFFICULTY_CONFIG = {
+  baseScrollSpeed: 1.5,
+  maxScrollSpeed: 5.0,
+  scrollSpeedIncrement: 0.15,
+  
+  baseGravity: 0.4,
+  maxGravity: 0.8,
+  gravityIncrement: 0.03,
+  
+  basePlatformWidth: 140,
+  minPlatformWidth: 60,
+  platformWidthDecrement: 5,
+  
+  basePlatformSpacing: 90,
+  maxPlatformSpacing: 150,
+  platformSpacingIncrement: 5,
+  
+  baseMoveSpeed: 1.5,
+  maxMoveSpeed: 4.0,
+  moveSpeedIncrement: 0.2,
+  
+  movingPlatformChance: 0.25,
+  maxMovingPlatformChance: 0.6,
+  movingPlatformChanceIncrement: 0.03
+}
+
+let difficultyParams = {
+  scrollSpeed: DIFFICULTY_CONFIG.baseScrollSpeed,
+  gravity: DIFFICULTY_CONFIG.baseGravity,
+  platformWidth: DIFFICULTY_CONFIG.basePlatformWidth,
+  platformSpacing: DIFFICULTY_CONFIG.basePlatformSpacing,
+  moveSpeed: DIFFICULTY_CONFIG.baseMoveSpeed,
+  movingPlatformChance: DIFFICULTY_CONFIG.movingPlatformChance
+}
+
+const player = {
+  x: 0,
+  y: 0,
+  width: 36,
+  height: 48,
+  velocityX: 0,
+  velocityY: 0,
+  maxSpeed: 7,
+  acceleration: 0.7,
+  friction: 0.92,
+  facingRight: true,
+  animFrame: 0,
+  standingPlatform: null
+}
+
+let platforms = []
+let particles = []
+
+const keys = {
+  left: false,
+  right: false
 }
 
 const cloudPositions = Array.from({ length: 20 }, () => ({
@@ -230,64 +257,65 @@ const saveHighScore = () => {
   }
 }
 
+const resetDifficulty = () => {
+  difficultyParams = {
+    scrollSpeed: DIFFICULTY_CONFIG.baseScrollSpeed,
+    gravity: DIFFICULTY_CONFIG.baseGravity,
+    platformWidth: DIFFICULTY_CONFIG.basePlatformWidth,
+    platformSpacing: DIFFICULTY_CONFIG.basePlatformSpacing,
+    moveSpeed: DIFFICULTY_CONFIG.baseMoveSpeed,
+    movingPlatformChance: DIFFICULTY_CONFIG.movingPlatformChance
+  }
+}
+
+const updateDifficulty = () => {
+  const level = Math.floor(currentFloor.value / 5)
+  
+  difficultyParams.scrollSpeed = Math.min(
+    DIFFICULTY_CONFIG.maxScrollSpeed,
+    DIFFICULTY_CONFIG.baseScrollSpeed + level * DIFFICULTY_CONFIG.scrollSpeedIncrement
+  )
+  
+  difficultyParams.gravity = Math.min(
+    DIFFICULTY_CONFIG.maxGravity,
+    DIFFICULTY_CONFIG.baseGravity + level * DIFFICULTY_CONFIG.gravityIncrement
+  )
+  
+  difficultyParams.platformWidth = Math.max(
+    DIFFICULTY_CONFIG.minPlatformWidth,
+    DIFFICULTY_CONFIG.basePlatformWidth - level * DIFFICULTY_CONFIG.platformWidthDecrement
+  )
+  
+  difficultyParams.platformSpacing = Math.min(
+    DIFFICULTY_CONFIG.maxPlatformSpacing,
+    DIFFICULTY_CONFIG.basePlatformSpacing + level * DIFFICULTY_CONFIG.platformSpacingIncrement
+  )
+  
+  difficultyParams.moveSpeed = Math.min(
+    DIFFICULTY_CONFIG.maxMoveSpeed,
+    DIFFICULTY_CONFIG.baseMoveSpeed + level * DIFFICULTY_CONFIG.moveSpeedIncrement
+  )
+  
+  difficultyParams.movingPlatformChance = Math.min(
+    DIFFICULTY_CONFIG.maxMovingPlatformChance,
+    DIFFICULTY_CONFIG.movingPlatformChance + level * DIFFICULTY_CONFIG.movingPlatformChanceIncrement
+  )
+}
+
 const initCanvas = () => {
-  canvas.value = gameCanvas.value
-  ctx.value = canvas.value.getContext('2d')
+  canvas = gameCanvas.value
+  ctx = canvas.getContext('2d')
   resizeCanvas()
 }
 
 const resizeCanvas = () => {
-  const container = canvas.value.parentElement
-  canvas.value.width = container.clientWidth
-  canvas.value.height = container.clientHeight
+  const container = canvas.parentElement
+  canvas.width = container.clientWidth
+  canvas.height = container.clientHeight
   
   if (gameState.value === 'idle') {
-    player.x = canvas.value.width / 2 - player.width / 2
-    player.y = 100
-  }
-}
-
-const createPlatform = (y, type = PLATFORM_TYPES.NORMAL) => {
-  const baseWidth = Math.max(80, 150 - difficulty * 5)
-  const width = baseWidth + Math.random() * 40
-  
-  return {
-    x: Math.random() * (canvas.value.width - width),
-    y: y,
-    width: width,
-    height: 20,
-    type: type,
-    opacity: 1,
-    isDisappearing: false,
-    disappearTimer: 0,
-    velocityX: Math.random() > 0.7 ? (Math.random() - 0.5) * (2 + difficulty * 0.3) : 0,
-    touched: false
-  }
-}
-
-const initPlatforms = () => {
-  platforms = []
-  const startPlatform = {
-    x: canvas.value.width / 2 - 80,
-    y: 150,
-    width: 160,
-    height: 20,
-    type: PLATFORM_TYPES.NORMAL,
-    opacity: 1,
-    isDisappearing: false,
-    disappearTimer: 0,
-    velocityX: 0,
-    touched: false
-  }
-  platforms.push(startPlatform)
-  
-  let y = 250
-  const spacing = 100
-  
-  while (y < canvas.value.height + 200) {
-    const type = getRandomPlatformType()
-    platforms.push(createPlatform(y, type))
-    y += spacing
+    player.x = canvas.width / 2 - player.width / 2
+    player.y = canvas.height * 0.4
   }
 }
 
@@ -303,23 +331,64 @@ const getRandomPlatformType = () => {
   return PLATFORM_TYPES.NORMAL
 }
 
+const createPlatform = (y, isStart = false) => {
+  const width = isStart ? 160 : difficultyParams.platformWidth + Math.random() * 30
+  const type = isStart ? PLATFORM_TYPES.NORMAL : getRandomPlatformType()
+  const isMoving = !isStart && Math.random() < difficultyParams.movingPlatformChance
+  
+  return {
+    x: isStart 
+      ? (canvas.width - width) / 2 
+      : Math.random() * (canvas.width - width),
+    y: y,
+    width: width,
+    height: 18,
+    type: type,
+    opacity: 1,
+    isDisappearing: false,
+    disappearTimer: 0,
+    velocityX: isMoving 
+      ? (Math.random() > 0.5 ? 1 : -1) * (difficultyParams.moveSpeed * (0.5 + Math.random() * 0.5))
+      : 0,
+    touched: false,
+    floorCounted: false
+  }
+}
+
+const initPlatforms = () => {
+  platforms = []
+  
+  const startY = canvas.height * 0.4
+  const startPlatform = createPlatform(startY, true)
+  platforms.push(startPlatform)
+  
+  let y = startY - difficultyParams.platformSpacing
+  
+  while (y > -difficultyParams.platformSpacing * 3) {
+    platforms.push(createPlatform(y))
+    y -= difficultyParams.platformSpacing
+  }
+}
+
 const initPlayer = () => {
-  player.x = canvas.value.width / 2 - player.width / 2
-  player.y = 80
+  const startPlatform = platforms.find(p => p.touched === false && p.type === PLATFORM_TYPES.NORMAL) || platforms[0]
+  
+  player.x = startPlatform.x + (startPlatform.width - player.width) / 2
+  player.y = startPlatform.y - player.height
   player.velocityX = 0
   player.velocityY = 0
-  player.isOnPlatform = true
-  player.currentPlatform = platforms[0]
+  player.standingPlatform = startPlatform
+  player.facingRight = true
 }
 
 const startGame = () => {
   gameState.value = 'playing'
   score.value = 0
   currentFloor.value = 0
-  difficulty = 1
   isNewHighScore.value = false
   particles = []
   
+  resetDifficulty()
   initPlatforms()
   initPlayer()
   
@@ -388,7 +457,6 @@ const handleKeyUp = (e) => {
 }
 
 const handleTouchStart = (direction) => {
-  touchDirection.value = direction
   if (direction === 'left') {
     keys.left = true
     keys.right = false
@@ -399,7 +467,6 @@ const handleTouchStart = (direction) => {
 }
 
 const handleTouchEnd = () => {
-  touchDirection.value = null
   keys.left = false
   keys.right = false
 }
@@ -409,12 +476,12 @@ const createParticles = (x, y, color, count = 10) => {
     particles.push({
       x: x,
       y: y,
-      velocityX: (Math.random() - 0.5) * 8,
-      velocityY: (Math.random() - 0.5) * 8 - 2,
-      size: 3 + Math.random() * 5,
+      velocityX: (Math.random() - 0.5) * 6,
+      velocityY: (Math.random() - 0.5) * 6 - 2,
+      size: 3 + Math.random() * 4,
       color: color,
       life: 1,
-      decay: 0.02 + Math.random() * 0.02
+      decay: 0.025 + Math.random() * 0.015
     })
   }
 }
@@ -423,8 +490,8 @@ const updateParticles = () => {
   for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i]
     p.x += p.velocityX
-    p.y += p.velocityY
-    p.velocityY += 0.2
+    p.y += p.velocityY + difficultyParams.scrollSpeed
+    p.velocityY += 0.15
     p.life -= p.decay
     
     if (p.life <= 0) {
@@ -433,21 +500,16 @@ const updateParticles = () => {
   }
 }
 
-const drawParticles = () => {
-  particles.forEach(p => {
-    ctx.value.save()
-    ctx.value.globalAlpha = p.life
-    ctx.value.fillStyle = p.color
-    ctx.value.beginPath()
-    ctx.value.arc(p.x, p.y, p.size, 0, Math.PI * 2)
-    ctx.value.fill()
-    ctx.value.restore()
-  })
-}
-
-const updateDifficulty = () => {
-  difficulty = 1 + Math.floor(currentFloor.value / 10) * 0.5
-  if (difficulty > 10) difficulty = 10
+const checkGameOver = () => {
+  if (player.y + player.height < -10) {
+    return true
+  }
+  
+  if (player.y > canvas.height + 50) {
+    return true
+  }
+  
+  return false
 }
 
 const updatePlayer = (dt) => {
@@ -466,46 +528,47 @@ const updatePlayer = (dt) => {
     player.velocityX = player.maxSpeed * Math.sign(player.velocityX)
   }
   
-  if (!player.isOnPlatform) {
-    player.velocityY += 0.5
-  }
+  player.velocityY += difficultyParams.gravity
   
   player.x += player.velocityX
-  player.y += player.velocityY
   
   if (player.x + player.width < 0) {
-    player.x = canvas.value.width
-  } else if (player.x > canvas.value.width) {
+    player.x = canvas.width
+  } else if (player.x > canvas.width) {
     player.x = -player.width
   }
   
-  if (player.velocityX !== 0) {
+  if (Math.abs(player.velocityX) > 0.3) {
     player.animFrame += 0.15
   }
-  
-  player.isOnPlatform = false
-  player.currentPlatform = null
 }
 
-const checkPlatformCollision = () => {
+const handlePlatformCollision = () => {
+  player.standingPlatform = null
+  
+  const playerBottom = player.y + player.height
+  const playerCenterX = player.x + player.width / 2
+  const prevBottom = playerBottom - player.velocityY
+  
   for (const platform of platforms) {
-    if (platform.isDisappearing && platform.opacity < 0.3) continue
-    
-    const playerBottom = player.y + player.height
-    const playerCenterX = player.x + player.width / 2
+    if (platform.opacity < 0.3) continue
     
     if (player.velocityY > 0 &&
+        prevBottom <= platform.y &&
         playerBottom >= platform.y &&
-        playerBottom <= platform.y + platform.height + player.velocityY &&
-        playerCenterX >= platform.x &&
-        playerCenterX <= platform.x + platform.width) {
+        playerCenterX >= platform.x - 5 &&
+        playerCenterX <= platform.x + platform.width + 5) {
       
       player.y = platform.y - player.height
-      player.isOnPlatform = true
-      player.currentPlatform = platform
+      player.velocityY = 0
+      player.standingPlatform = platform
       
       if (!platform.touched) {
         platform.touched = true
+      }
+      
+      if (!platform.floorCounted) {
+        platform.floorCounted = true
         currentFloor.value++
         updateDifficulty()
         
@@ -517,14 +580,16 @@ const checkPlatformCollision = () => {
       
       switch (platform.type) {
         case PLATFORM_TYPES.BOUNCY:
-          player.velocityY = -12
-          player.isOnPlatform = false
+          player.velocityY = -14
+          player.standingPlatform = null
           createParticles(player.x + player.width / 2, player.y + player.height, '#80C8FF', 15)
           break
           
         case PLATFORM_TYPES.DISAPPEARING:
-          platform.isDisappearing = true
-          createParticles(player.x + player.width / 2, player.y + player.height, '#FF8080', 10)
+          if (!platform.isDisappearing) {
+            platform.isDisappearing = true
+            createParticles(player.x + player.width / 2, player.y + player.height, '#FF8080', 10)
+          }
           break
           
         case PLATFORM_TYPES.BONUS:
@@ -532,149 +597,151 @@ const checkPlatformCollision = () => {
           score.value += bigBonus
           createParticles(player.x + player.width / 2, player.y + player.height, '#FFD700', 25)
           break
-          
-        default:
-          player.velocityY = 0
-      }
-      
-      if (platform.velocityX !== 0 && platform.type !== PLATFORM_TYPES.BOUNCY) {
-        player.x += platform.velocityX
       }
       
       break
     }
   }
-}
-
-const updatePlatforms = (dt) => {
-  const scrollSpeed = 1 + difficulty * 0.3
-  const targetY = canvas.value.height * 0.4
   
-  if (player.y < targetY && player.velocityY < 0) {
-    const scrollAmount = targetY - player.y
-    player.y = targetY
-    
-    platforms.forEach(p => {
-      p.y += scrollAmount
-    })
+  if (player.standingPlatform && player.standingPlatform.velocityX !== 0) {
+    player.x += player.standingPlatform.velocityX
   }
   
+  player.y += player.velocityY
+}
+
+const updatePlatforms = () => {
   platforms.forEach(platform => {
+    platform.y += difficultyParams.scrollSpeed
+    
     if (platform.velocityX !== 0) {
       platform.x += platform.velocityX
-      if (platform.x <= 0 || platform.x + platform.width >= canvas.value.width) {
+      if (platform.x <= 0) {
+        platform.x = 0
+        platform.velocityX *= -1
+      }
+      if (platform.x + platform.width >= canvas.width) {
+        platform.x = canvas.width - platform.width
         platform.velocityX *= -1
       }
     }
     
     if (platform.isDisappearing) {
-      platform.opacity -= 0.03
+      platform.opacity -= 0.025
     }
   })
   
-  platforms = platforms.filter(p => p.y < canvas.value.height + 100 && p.opacity > 0)
+  platforms = platforms.filter(p => p.y < canvas.height + 100 && p.opacity > 0)
   
-  let highestPlatformY = Math.min(...platforms.map(p => p.y))
-  const spacing = Math.max(60, 100 - difficulty * 3)
+  let highestY = Math.min(...platforms.map(p => p.y))
   
-  while (highestPlatformY > -spacing) {
-    const type = getRandomPlatformType()
-    platforms.push(createPlatform(highestPlatformY - spacing, type))
-    highestPlatformY -= spacing
-  }
-  
-  if (player.y > canvas.value.height + 50) {
-    gameOver()
+  while (highestY > -difficultyParams.platformSpacing) {
+    const newY = highestY - difficultyParams.platformSpacing
+    platforms.push(createPlatform(newY))
+    highestY = newY
   }
 }
 
 const drawBackground = () => {
-  const gradient = ctx.value.createLinearGradient(0, 0, 0, canvas.value.height)
+  const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height)
   gradient.addColorStop(0, '#E8F4F8')
   gradient.addColorStop(0.5, '#D4E5ED')
   gradient.addColorStop(1, '#C5DDE8')
-  ctx.value.fillStyle = gradient
-  ctx.value.fillRect(0, 0, canvas.value.width, canvas.value.height)
+  ctx.fillStyle = gradient
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
   
   const time = performance.now() / 1000
   for (let i = 0; i < 5; i++) {
-    const x = (Math.sin(time * 0.2 + i) + 1) / 2 * canvas.value.width
-    const y = (Math.cos(time * 0.15 + i * 1.5) + 1) / 2 * canvas.value.height
+    const x = (Math.sin(time * 0.2 + i) + 1) / 2 * canvas.width
+    const y = (Math.cos(time * 0.15 + i * 1.5) + 1) / 2 * canvas.height
     const radius = 50 + Math.sin(time * 0.3 + i) * 20
     
-    const glow = ctx.value.createRadialGradient(x, y, 0, x, y, radius)
+    const glow = ctx.createRadialGradient(x, y, 0, x, y, radius)
     glow.addColorStop(0, 'rgba(255, 255, 255, 0.15)')
     glow.addColorStop(1, 'rgba(255, 255, 255, 0)')
     
-    ctx.value.fillStyle = glow
-    ctx.value.beginPath()
-    ctx.value.arc(x, y, radius, 0, Math.PI * 2)
-    ctx.value.fill()
+    ctx.fillStyle = glow
+    ctx.beginPath()
+    ctx.arc(x, y, radius, 0, Math.PI * 2)
+    ctx.fill()
   }
 }
 
 const drawPlatform = (platform) => {
   if (platform.opacity <= 0) return
   
-  ctx.value.save()
-  ctx.value.globalAlpha = platform.opacity
+  ctx.save()
+  ctx.globalAlpha = platform.opacity
   
   const colors = COLORS.platforms[platform.type]
   
   ctx.shadowColor = colors.glow
-  ctx.shadowBlur = 15
-  ctx.shadowOffsetY = 5
+  ctx.shadowBlur = 12
+  ctx.shadowOffsetY = 4
   
-  const radius = 10
+  const radius = 9
   const x = platform.x
   const y = platform.y
   const w = platform.width
   const h = platform.height
   
-  ctx.value.beginPath()
-  ctx.value.roundRect(x, y, w, h, radius)
+  ctx.beginPath()
+  if (ctx.roundRect) {
+    ctx.roundRect(x, y, w, h, radius)
+  } else {
+    const r = radius
+    ctx.moveTo(x + r, y)
+    ctx.lineTo(x + w - r, y)
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r)
+    ctx.lineTo(x + w, y + h - r)
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h)
+    ctx.lineTo(x + r, y + h)
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r)
+    ctx.lineTo(x, y + r)
+    ctx.quadraticCurveTo(x, y, x + r, y)
+  }
   
-  const gradient = ctx.value.createLinearGradient(x, y, x, y + h)
+  const gradient = ctx.createLinearGradient(x, y, x, y + h)
   gradient.addColorStop(0, colors.top)
   gradient.addColorStop(1, colors.bottom)
-  ctx.value.fillStyle = gradient
-  ctx.value.fill()
+  ctx.fillStyle = gradient
+  ctx.fill()
   
-  ctx.value.strokeStyle = 'rgba(255, 255, 255, 0.5)'
-  ctx.value.lineWidth = 2
-  ctx.value.stroke()
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)'
+  ctx.lineWidth = 1.5
+  ctx.stroke()
   
-  ctx.value.shadowColor = 'transparent'
-  ctx.value.fillStyle = 'rgba(255, 255, 255, 0.3)'
-  ctx.value.fillRect(x + 5, y + 3, w - 10, 4)
+  ctx.shadowColor = 'transparent'
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.3)'
+  ctx.fillRect(x + 5, y + 3, w - 10, 3)
   
   if (platform.type === PLATFORM_TYPES.BOUNCY) {
     const springY = y + h / 2
-    ctx.value.strokeStyle = 'rgba(100, 180, 255, 0.8)'
-    ctx.value.lineWidth = 3
-    ctx.value.beginPath()
-    for (let i = 0; i < 4; i++) {
-      const sx = x + 15 + i * (w - 30) / 3
-      ctx.value.moveTo(sx - 8, springY)
-      ctx.value.quadraticCurveTo(sx - 4, springY - 5, sx, springY)
-      ctx.value.quadraticCurveTo(sx + 4, springY + 5, sx + 8, springY)
+    ctx.strokeStyle = 'rgba(100, 180, 255, 0.8)'
+    ctx.lineWidth = 2.5
+    ctx.beginPath()
+    const springCount = Math.max(2, Math.floor(w / 50))
+    for (let i = 0; i < springCount; i++) {
+      const sx = x + 15 + i * (w - 30) / Math.max(1, springCount - 1)
+      ctx.moveTo(sx - 7, springY)
+      ctx.quadraticCurveTo(sx - 3, springY - 4, sx, springY)
+      ctx.quadraticCurveTo(sx + 3, springY + 4, sx + 7, springY)
     }
-    ctx.value.stroke()
+    ctx.stroke()
   } else if (platform.type === PLATFORM_TYPES.BONUS) {
     const starX = x + w / 2
     const starY = y + h / 2
-    ctx.value.fillStyle = 'rgba(255, 255, 255, 0.8)'
-    drawStar(starX, starY, 5, 8, 4)
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)'
+    drawStar(starX, starY, 5, 7, 3.5)
   } else if (platform.type === PLATFORM_TYPES.DISAPPEARING && platform.isDisappearing) {
-    ctx.value.fillStyle = 'rgba(255, 100, 100, 0.3)'
-    ctx.value.setLineDash([5, 5])
-    ctx.value.strokeStyle = 'rgba(255, 50, 50, 0.8)'
-    ctx.value.lineWidth = 2
-    ctx.value.strokeRect(x - 2, y - 2, w + 4, h + 4)
-    ctx.value.setLineDash([])
+    ctx.setLineDash([4, 4])
+    ctx.strokeStyle = 'rgba(255, 50, 50, 0.7)'
+    ctx.lineWidth = 2
+    ctx.strokeRect(x - 2, y - 2, w + 4, h + 4)
+    ctx.setLineDash([])
   }
   
-  ctx.value.restore()
+  ctx.restore()
 }
 
 const drawStar = (cx, cy, spikes, outerRadius, innerRadius) => {
@@ -683,121 +750,133 @@ const drawStar = (cx, cy, spikes, outerRadius, innerRadius) => {
   let y = cy
   const step = Math.PI / spikes
   
-  ctx.value.beginPath()
-  ctx.value.moveTo(cx, cy - outerRadius)
+  ctx.beginPath()
+  ctx.moveTo(cx, cy - outerRadius)
   
   for (let i = 0; i < spikes; i++) {
     x = cx + Math.cos(rot) * outerRadius
     y = cy + Math.sin(rot) * outerRadius
-    ctx.value.lineTo(x, y)
+    ctx.lineTo(x, y)
     rot += step
     
     x = cx + Math.cos(rot) * innerRadius
     y = cy + Math.sin(rot) * innerRadius
-    ctx.value.lineTo(x, y)
+    ctx.lineTo(x, y)
     rot += step
   }
   
-  ctx.value.lineTo(cx, cy - outerRadius)
-  ctx.value.closePath()
-  ctx.value.fill()
+  ctx.lineTo(cx, cy - outerRadius)
+  ctx.closePath()
+  ctx.fill()
 }
 
 const drawPlayer = () => {
-  ctx.value.save()
+  ctx.save()
   
   const x = player.x
   const y = player.y
   const w = player.width
   const h = player.height
   
-  ctx.value.translate(x + w / 2, y + h / 2)
+  ctx.translate(x + w / 2, y + h / 2)
   
   if (!player.facingRight) {
-    ctx.value.scale(-1, 1)
+    ctx.scale(-1, 1)
   }
   
-  if (Math.abs(player.velocityX) > 0.5) {
-    const tilt = Math.sin(player.animFrame) * 0.1
-    ctx.value.rotate(tilt)
+  if (Math.abs(player.velocityX) > 0.3) {
+    const tilt = Math.sin(player.animFrame) * 0.08
+    ctx.rotate(tilt)
   }
   
-  ctx.value.shadowColor = 'rgba(255, 105, 180, 0.4)'
-  ctx.value.shadowBlur = 15
-  ctx.value.shadowOffsetY = 5
+  ctx.shadowColor = 'rgba(255, 105, 180, 0.35)'
+  ctx.shadowBlur = 12
+  ctx.shadowOffsetY = 4
   
-  const bodyGradient = ctx.value.createRadialGradient(0, 5, 0, 0, 5, w / 2)
+  const bodyGradient = ctx.createRadialGradient(0, 5, 0, 0, 5, w / 2)
   bodyGradient.addColorStop(0, COLORS.player.body)
   bodyGradient.addColorStop(1, COLORS.player.bodyShadow)
   
-  ctx.value.fillStyle = bodyGradient
-  ctx.value.beginPath()
-  ctx.value.ellipse(0, 8, w / 2 - 2, h / 2 - 5, 0, 0, Math.PI * 2)
-  ctx.value.fill()
+  ctx.fillStyle = bodyGradient
+  ctx.beginPath()
+  ctx.ellipse(0, 8, w / 2 - 2, h / 2 - 5, 0, 0, Math.PI * 2)
+  ctx.fill()
   
-  ctx.value.shadowColor = 'transparent'
+  ctx.shadowColor = 'transparent'
   
-  ctx.value.strokeStyle = COLORS.player.outline
-  ctx.value.lineWidth = 2
-  ctx.value.stroke()
+  ctx.strokeStyle = COLORS.player.outline
+  ctx.lineWidth = 1.5
+  ctx.stroke()
   
-  ctx.value.fillStyle = 'rgba(255, 255, 255, 0.3)'
-  ctx.value.beginPath()
-  ctx.value.ellipse(-5, -5, 8, 5, -0.3, 0, Math.PI * 2)
-  ctx.value.fill()
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.25)'
+  ctx.beginPath()
+  ctx.ellipse(-4, -4, 7, 4, -0.3, 0, Math.PI * 2)
+  ctx.fill()
   
-  ctx.value.fillStyle = COLORS.player.face
-  ctx.value.beginPath()
-  ctx.value.ellipse(0, 0, w / 2 - 4, h / 2 - 8, 0, 0, Math.PI * 2)
-  ctx.value.fill()
+  ctx.fillStyle = COLORS.player.face
+  ctx.beginPath()
+  ctx.ellipse(0, 0, w / 2 - 4, h / 2 - 8, 0, 0, Math.PI * 2)
+  ctx.fill()
   
   const eyeY = -3
-  const eyeSpacing = 8
+  const eyeSpacing = 7
   
-  ctx.value.fillStyle = 'white'
-  ctx.value.beginPath()
-  ctx.value.ellipse(-eyeSpacing, eyeY, 6, 7, 0, 0, Math.PI * 2)
-  ctx.value.ellipse(eyeSpacing, eyeY, 6, 7, 0, 0, Math.PI * 2)
-  ctx.value.fill()
+  ctx.fillStyle = 'white'
+  ctx.beginPath()
+  ctx.ellipse(-eyeSpacing, eyeY, 5.5, 6.5, 0, 0, Math.PI * 2)
+  ctx.ellipse(eyeSpacing, eyeY, 5.5, 6.5, 0, 0, Math.PI * 2)
+  ctx.fill()
   
-  const lookX = player.velocityX * 0.3
-  const lookY = player.velocityY > 0 ? 1 : 0
+  const lookX = player.velocityX * 0.25
+  const lookY = player.velocityY > 3 ? 1 : 0
   
-  ctx.value.fillStyle = COLORS.player.eyes
-  ctx.value.beginPath()
-  ctx.value.arc(-eyeSpacing + lookX, eyeY + lookY, 3, 0, Math.PI * 2)
-  ctx.value.arc(eyeSpacing + lookX, eyeY + lookY, 3, 0, Math.PI * 2)
-  ctx.value.fill()
+  ctx.fillStyle = COLORS.player.eyes
+  ctx.beginPath()
+  ctx.arc(-eyeSpacing + lookX, eyeY + lookY, 2.5, 0, Math.PI * 2)
+  ctx.arc(eyeSpacing + lookX, eyeY + lookY, 2.5, 0, Math.PI * 2)
+  ctx.fill()
   
-  ctx.value.fillStyle = 'white'
-  ctx.value.beginPath()
-  ctx.value.arc(-eyeSpacing + lookX - 1, eyeY + lookY - 1, 1.5, 0, Math.PI * 2)
-  ctx.value.arc(eyeSpacing + lookX - 1, eyeY + lookY - 1, 1.5, 0, Math.PI * 2)
-  ctx.value.fill()
+  ctx.fillStyle = 'white'
+  ctx.beginPath()
+  ctx.arc(-eyeSpacing + lookX - 0.8, eyeY + lookY - 0.8, 1.2, 0, Math.PI * 2)
+  ctx.arc(eyeSpacing + lookX - 0.8, eyeY + lookY - 0.8, 1.2, 0, Math.PI * 2)
+  ctx.fill()
   
-  ctx.value.fillStyle = 'rgba(255, 182, 193, 0.6)'
-  ctx.value.beginPath()
-  ctx.value.ellipse(-eyeSpacing - 8, eyeY + 5, 5, 3, 0, 0, Math.PI * 2)
-  ctx.value.ellipse(eyeSpacing + 8, eyeY + 5, 5, 3, 0, 0, Math.PI * 2)
-  ctx.value.fill()
+  ctx.fillStyle = 'rgba(255, 182, 193, 0.55)'
+  ctx.beginPath()
+  ctx.ellipse(-eyeSpacing - 7, eyeY + 5, 4.5, 2.8, 0, 0, Math.PI * 2)
+  ctx.ellipse(eyeSpacing + 7, eyeY + 5, 4.5, 2.8, 0, 0, Math.PI * 2)
+  ctx.fill()
   
-  ctx.value.strokeStyle = '#FF69B4'
-  ctx.value.lineWidth = 1.5
-  ctx.value.lineCap = 'round'
-  ctx.value.beginPath()
-  if (player.velocityY > 5) {
-    ctx.value.ellipse(0, 8, 4, 5, 0, 0, Math.PI * 2)
-    ctx.value.stroke()
+  ctx.strokeStyle = '#FF69B4'
+  ctx.lineWidth = 1.2
+  ctx.lineCap = 'round'
+  ctx.beginPath()
+  if (player.velocityY > 4) {
+    ctx.ellipse(0, 8, 3.5, 4.5, 0, 0, Math.PI * 2)
+    ctx.stroke()
   } else {
-    ctx.value.arc(0, 8, 4, 0, Math.PI)
-    ctx.value.stroke()
+    ctx.arc(0, 8, 3.5, 0, Math.PI)
+    ctx.stroke()
   }
   
-  ctx.value.restore()
+  ctx.restore()
+}
+
+const drawParticles = () => {
+  particles.forEach(p => {
+    ctx.save()
+    ctx.globalAlpha = p.life
+    ctx.fillStyle = p.color
+    ctx.beginPath()
+    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.restore()
+  })
 }
 
 const render = () => {
-  ctx.value.clearRect(0, 0, canvas.value.width, canvas.value.height)
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
   
   drawBackground()
   
@@ -813,13 +892,19 @@ const render = () => {
 const gameLoop = (currentTime = 0) => {
   if (gameState.value !== 'playing') return
   
-  const dt = (currentTime - lastTime) / 16.67
+  const dt = Math.min((currentTime - lastTime) / 16.67, 3)
   lastTime = currentTime
   
   updatePlayer(dt)
-  checkPlatformCollision()
-  updatePlatforms(dt)
+  handlePlatformCollision()
+  updatePlatforms()
   updateParticles()
+  
+  if (checkGameOver()) {
+    gameOver()
+    return
+  }
+  
   render()
   
   animationId = requestAnimationFrame(gameLoop)
